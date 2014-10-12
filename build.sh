@@ -10,10 +10,10 @@ RELEASE="wheezy"                                   # jessie(currently broken) or
 VERSION="Cubox Debian 1.6 $RELEASE"                # just name
 SOURCE_COMPILE="yes"                               # yes / no
 DEST_LANG="en_US.UTF-8"                            # sl_SI.UTF-8, en_US.UTF-8
-TZDATA="Europe/Ljubljana"                          # Timezone
+TZDATA="Europe/Amsterdam"                          # Timezone
 DEST=$(pwd)/output                                 # Destination
 ROOTPWD="1234"                                     # Must be changed @first login
-HOST="cubox"									   # Hostname
+HOST="hummingboard"								   # Hostname
 
 #
 #
@@ -25,8 +25,8 @@ set -e
 
 # optimize build time with 100% CPU usage
 CPUS=$(grep -c 'processor' /proc/cpuinfo)
-#CTHREADS="-j$(($CPUS + $CPUS/2))"
-CTHREADS="-j${CPUS}" # or not
+CTHREADS="-j$(($CPUS + $CPUS/2))"
+#CTHREADS="-j${CPUS}" # or not
 
 # to display build time at the end
 start=`date +%s`
@@ -94,9 +94,9 @@ rm -rf $DEST/linux-cubox/output
 # boot loader
 echo "------ Compiling universal boot loader"
 cd $DEST/u-boot-cubox
-make CROSS_COMPILE=arm-linux-gnueabihf- clean
+#make CROSS_COMPILE=arm-linux-gnueabihf- clean
 make $CTHREADS mx6_cubox-i_config CROSS_COMPILE=arm-linux-gnueabihf- 
-make $CTHREADS CROSS_COMPILE=arm-linux-gnueabihf- CONFIG_BOOTDELAY=0
+make $CTHREADS CROSS_COMPILE=arm-linux-gnueabihf- CONFIG_BOOTDELAY=5
 
 # kernel image
 #cd $DEST/linux-cubox
@@ -109,19 +109,20 @@ make $CTHREADS CROSS_COMPILE=arm-linux-gnueabihf- CONFIG_BOOTDELAY=0
 #cp $DEST/linux-cubox-next/Module.symvers $DEST/linux-cubox-next/output/usr/include
 
 # kernel image next
+VER=$(cat $DEST/linux-cubox-next/Makefile | grep VERSION | head -1 | awk '{print $(NF)}')
+VER=$VER.$(cat $DEST/linux-cubox-next/Makefile | grep PATCHLEVEL | head -1 | awk '{print $(NF)}')
+VER=$VER.$(cat $DEST/linux-cubox-next/Makefile | grep SUBLEVEL | head -1 | awk '{print $(NF)}')
 rm -rf $DEST/linux-cubox-next/output
 cd $DEST/linux-cubox-next
 tar xvfz $SRC/bin/wifi-firmware.tgz
-make CROSS_COMPILE=arm-linux-gnueabihf- clean
-cp $SRC/config/kernel.config.next $DEST/linux-cubox-next/.config
+#make CROSS_COMPILE=arm-linux-gnueabihf- clean
+#cp $SRC/config/kernel.config.next $DEST/linux-cubox-next/.config
 #make $CTHREADS ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- imx_v7_cbi_hb_base_defconfig # default config
 make $CTHREADS ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- zImage modules imx6q-cubox-i.dtb imx6dl-cubox-i.dtb imx6dl-hummingboard.dtb imx6q-hummingboard.dtb LOCALVERSION="-cubox"
 make $CTHREADS ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=output modules_install
-make $CTHREADS ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_HDR_PATH=output/usr headers_install
-cp $DEST/linux-cubox-next/Module.symvers $DEST/linux-cubox-next/output/usr/include
+make $CTHREADS ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_HDR_PATH=output/usr/src/linux-headers-$VER headers_install
+cp $DEST/linux-cubox-next/Module.symvers $DEST/linux-cubox-next/output/usr/src/linux-headers-$VER
 fi
-
-
 
 #--------------------------------------------------------------------------------
 # Creating boot directory for current and next kernel
@@ -133,6 +134,7 @@ mkdir -p $DEST/output/boot/
 #cp $SRC/config/kernel-switching.txt $DEST/output/boot/
 cp $SRC/config/uEnv.* $DEST/output/boot/
 cp $DEST/u-boot-cubox/u-boot.img $DEST/output/u-boot.img
+cp $DEST/u-boot-cubox/u-boot.img $DEST/output/boot/u-boot.img
 cp $DEST/u-boot-cubox/SPL $DEST/output/SPL
 #cp $SRC/output/linux-cubox/arch/arm/boot/uImage $DEST/output/boot/uImage
 cp $SRC/output/linux-cubox-next/arch/arm/boot/zImage $DEST/output/boot/zImage
@@ -158,9 +160,6 @@ cp $DEST/linux-cubox-next/arch/arm/boot/dts/imx6*.dtb $DEST/output/boot/
 
 
 # Next
-VER=$(cat $DEST/linux-cubox-next/Makefile | grep VERSION | head -1 | awk '{print $(NF)}')
-VER=$VER.$(cat $DEST/linux-cubox-next/Makefile | grep PATCHLEVEL | head -1 | awk '{print $(NF)}')
-VER=$VER.$(cat $DEST/linux-cubox-next/Makefile | grep SUBLEVEL | head -1 | awk '{print $(NF)}')
 cd $SRC/output/linux-cubox-next/output
 rm -f $DEST"/output/cubox_kernel_"$VER"_mod_head_fw.tar"
 tar cPf $DEST"/output/cubox_kernel_"$VER"_mod_head_fw.tar" *
@@ -183,41 +182,37 @@ losetup $LOOP debian_rootfs.raw
 sync
 
 echo "Partitioning, writing boot loader and mounting file-system."
-# create one partition starting at 2048 which is default
+# create boot partition starting at 2048 which is default, and primary partition after that
 parted -s $LOOP -- mklabel msdos
 sleep 1
-parted -s $LOOP -- mkpart primary ext4  2048s -1s
+# boot
+parted -a optimal -s $LOOP -- mkpart primary fat32 1M 22M
+# rootfs
+parted -a optimal -s /dev/loop0 mkpart primary ext4 22M 100%
 sleep 1
 partprobe $LOOP
 sleep 1
 
 echo "Writing boot loader."
 dd if=$DEST/output/SPL of=$LOOP bs=512 seek=2 status=noxfer
-dd if=$DEST/output/u-boot.img of=$LOOP bs=1K seek=42 status=noxfer
 rm $DEST/output/SPL
-rm $DEST/output/u-boot.img
 sync
-sleep 5
-losetup -d $LOOP
-sleep 4
 
-# 2048 (start) x 512 (block size) = where to mount partition
-losetup -o 1048576 $LOOP debian_rootfs.raw
-sleep 4
-
-# create filesystem
-mkfs.ext4 $LOOP
+# create filesystems and label them
+mkfs.vfat -n "BOOT" $LOOP"p1"
+mkfs.ext4 -L "Root" $LOOP"p2"
+sync
+sleep 2
 
 # tune filesystem
-tune2fs -o journal_data_writeback $LOOP
-
-# label it
-e2label $LOOP "Root"
+tune2fs -o journal_data_writeback $LOOP"p2"
 
 # create mount point and mount image 
-mkdir -p $DEST/output/sdcard/
+mkdir -p $DEST/output/sdcard
+mount -t ext4 $LOOP"p2" $DEST/output/sdcard/
 
-mount -t ext4 $LOOP $DEST/output/sdcard/
+mkdir -p $DEST/output/sdcard/boot
+mount -t vfat $LOOP"p1" $DEST/output/sdcard/boot
 
 echo "------ Install basic filesystem"
 # install base system
@@ -417,7 +412,8 @@ EOT
 
 # add noatime to root FS
 cat <<EOT >> $DEST/output/sdcard/etc/fstab
-/dev/mmcblk0p1  /           ext4    defaults,noatime,nodiratime,data=writeback,commit=600,errors=remount-ro        0       0
+/dev/mmcblk0p1  /boot       vfat    defaults                                                                       0       0
+/dev/mmcblk0p2  /           ext4    defaults,noatime,nodiratime,data=writeback,commit=600,errors=remount-ro        0       0
 
 EOT
 # flash media tunning
@@ -430,7 +426,8 @@ sed -e 's/#TMP_SIZE=/TMP_SIZE=1G/g' -i $DEST/output/sdcard/etc/default/tmpfs
 # enable serial console (Debian/sysvinit way)
 echo T0:2345:respawn:/sbin/getty -L ttymxc0 115200 vt100 >> $DEST/output/sdcard/etc/inittab
 
-# uncompress kernel
+# uncompress kernel and boot images
+echo "------ Copying boot, kernel and kernel-header files"
 cd $DEST/output/sdcard/
 ls ../*.tar | xargs -i tar xf {}
 
@@ -484,8 +481,10 @@ VERSION="${VERSION// /_}"
 
 sleep 4
 killall ntpd
-rm $DEST/output/sdcard/usr/bin/qemu-arm-static 
+rm $DEST/output/sdcard/usr/bin/qemu-arm-static
+ 
 # umount images 
+umount -l $DEST/output/sdcard/boot 
 umount -l $DEST/output/sdcard/ 
 sleep 4
 losetup -d $LOOP
