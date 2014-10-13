@@ -21,7 +21,7 @@ set -e
 
 do_expand_rootfs(){
         device="/dev/mmcblk0"
-        (echo d; echo n; echo p; echo 1; echo ; echo; echo w;) | fdisk $device 
+        (echo d; echo 2; echo n; echo p; echo 2; echo ; echo ; echo w;) | fdisk $device 
 return 0
 }
 
